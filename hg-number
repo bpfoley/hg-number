@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List
+
+def find_hg_root(p: Path):
+  """Find the nearest parent dir containing a .hg dir. Exit if none found."""
+  while not (p / '.hg').is_dir():
+    if p.parent == p:
+      print("Warning: Not in a mercurial workspace")
+      sys.exit(1)
+    p = p.parent
+  return p
+
+def hg_path_to_rel(path: Path) -> Path:
+  """Convert a path relative to hg_root to one relative to the user's current working dir"""
+  return Path(os.path.relpath(hg_root / path, Path.cwd()))
+
+hg_root: Path = find_hg_root(Path.cwd())
+shortcuts_file: Path = hg_root / '.hg' / 'hg-number-shortcuts.txt'
+
+bold = '\033[1m'
+red = '\033[31m'
+green = '\033[32m'
+yellow = '\033[33m'
+blue = '\033[34m'
+cyan = '\033[36m'
+magenta = '\033[35m'
+normal = '\033[0m'
+
+change_col = {
+  'M': blue,
+  'A': green,
+  'R': red,
+  '?': magenta,
+}
+
+args = sys.argv[1:]
+
+# If run as `hg-number status`, parse the Mercurial output; display status with
+# shortcuts & relative paths; and store the shortcuts in a text file for use in
+# subsequent invocations.
+if not args or args == ['status']:
+  shortcut_lines: List[str] = []
+  n = 1
+  for l in subprocess.check_output(['hg', 'status'], encoding='utf8').splitlines():
+    m = re.match(r'^(?P<status>[MAR\?]) (?P<filename>.*$)', l)
+    if m:
+      status, filename = m['status'], Path(m['filename'])
+      status_col = change_col[status]
+      l = f'{yellow}{n} {bold}{status_col}{status} {hg_path_to_rel(filename)}{normal}'
+      shortcut_lines.append(f'{n} {filename}')
+      n += 1
+    print(l)
+  with open(shortcuts_file, 'w') as f:
+    f.write('\n'.join(shortcut_lines))
+  sys.exit(0)
+
+# If run with arguments other than status, parse the previously created shortcuts file.
+try:
+  shortcuts: Dict[int, Path] = {}
+  with open(shortcuts_file) as f:
+    for l in f:
+      k, v = l.rstrip().split(' ', 1)
+      shortcuts[int(k)] = Path(v)
+except IOError:
+  print("Please run hg-number first")
+  sys.exit(1)
+
+# Do we want to run hg, or some arbitrary command (eg vi, cat, rm)?
+if args[0] == '-c':
+  new_args = [args[1]]
+  args = args[2:]
+else:
+  new_args = ['hg']
+
+# Replace all the shortcut IDs on the command line with full paths,
+# preserve the other arguments, then run the resulting command.
+for arg in args:
+  # Only match numbers from 1-9999 to avoid potential collisions with numeric args.
+  # If your Mercurial changeset has >10k files in it, you're on your own!
+  # Shortcuts may be ranges, in which case they're inclusive, eg 7-11 is the
+  # same as 7 8 9 10 11.
+  m = re.match(r'(?P<start>\d{1,4})(-(?P<end>\d{1,4}))?', arg)
+  if m:
+    # A shortcut, or a shortcut range
+    s, e = int(m['start']), int(m['end'] or m['start'])
+    if s > e:
+      print(f'Invalid shortcut range {arg}')
+      sys.exit(1)
+    for i in range(s, e + 1):
+      if i not in shortcuts:
+        print(f'ID {i} not in hg status list')
+        sys.exit(1)
+      new_args.append(str(hg_path_to_rel(shortcuts[i])))
+  else:
+    # Not a shortcut, just pass the arg through
+    new_args.append(arg)
+    continue
+
+os.execvp(new_args[0], new_args)
