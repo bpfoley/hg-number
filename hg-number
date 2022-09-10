@@ -24,6 +24,8 @@ hg_root: Path = find_hg_root(Path.cwd())
 shortcuts_file: Path = hg_root / '.hg' / 'hg-number-shortcuts.txt'
 
 bold = '\033[1m'
+underline = '\033[4m'
+black = '\033[30m'
 red = '\033[31m'
 green = '\033[32m'
 yellow = '\033[33m'
@@ -32,23 +34,34 @@ cyan = '\033[36m'
 magenta = '\033[35m'
 normal = '\033[0m'
 
+# See https://www.mercurial-scm.org/repo/hg/file/tip/mercurial/commands.py#l6809
+#     https://www.mercurial-scm.org/repo/hg/file/tip/mercurial/color.py#l137
+#     https://www.mercurial-scm.org/repo/hg/file/tip/rust/rhg/src/commands/status.rs#l321
 change_col = {
-  'M': blue,
-  'A': green,
-  'R': red,
-  '?': magenta,
+  'M': blue + bold,                # modified
+  'A': green + bold,               # added
+  'R': red + bold,                 # removed
+  '!': cyan + bold + underline,    # deleted
+  '?': magenta + bold + underline, # unknown
+  'I': black + bold,               # ignored
+  'C': '',                         # clean
 }
 
 args = sys.argv[1:]
 
+if not args:
+    args = ['status']
+
 # If run as `hg-number status`, parse the Mercurial output; display status with
 # shortcuts & relative paths; and store the shortcuts in a text file for use in
 # subsequent invocations.
-if not args or args == ['status']:
+if args[0] == 'status':
   shortcut_lines: List[str] = []
   n = 1
-  for l in subprocess.check_output(['hg', 'status'], encoding='utf8').splitlines():
-    m = re.match(r'^(?P<status>[MAR\?]) (?P<filename>.*$)', l)
+  status_chars = '[' + ''.join(change_col.keys()) + ']'
+  status_re = re.compile(f'^(?P<status>{status_chars}) (?P<filename>.*$)')
+  for l in subprocess.check_output(['hg'] + args, encoding='utf8').splitlines():
+    m = status_re.match(l)
     if m:
       status, filename = m['status'], Path(m['filename'])
       status_col = change_col[status]
